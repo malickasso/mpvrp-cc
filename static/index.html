@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="fr">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -7,6 +8,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
 </head>
+
 <body>
     <div class="glass-bg"></div>
     <main class="container">
@@ -34,19 +36,28 @@
             </div>
         </section>
 
-        <section class="visualization-panel">
-            <div class="card map-container">
-                <svg id="routeMap" viewBox="0 0 100 100" preserveAspectRatio="xMidYMid meet">
-                    <!-- Routes and points will be drawn here -->
-                </svg>
-                <div class="legend" id="legend"></div>
+        <section class="visualization-panel card">
+            <div class="map-container" id="map-3d">
+                <!-- Three.js Canvas will be injected here -->
+                <div id="loading-overlay"
+                    style="display:none; position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);">
+                    Calcul de la scène 3D...
+                </div>
+            </div>
+            <div class="legend">
+                <div class="legend-item"><span class="dot" style="background:var(--primary)"></span> Garage</div>
+                <div class="legend-item"><span class="dot" style="background:#f59e0b"></span> Dépôt</div>
+                <div class="legend-item"><span class="dot" style="background:#ef4444"></span> Station</div>
             </div>
         </section>
-        
+
         <section class="routes-list">
             <div id="routesAccordion"></div>
         </section>
     </main>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
     <script src="script.js"></script>
 </body>
+
 </html>
