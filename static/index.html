@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MPVRP-CC Solver Dashboard</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="glass-bg"></div>
+    <main class="container">
+        <header>
+            <h1>MPVRP-CC <span class="accent">Optimizer</span></h1>
+            <p>Multi-Product Vehicle Routing Problem with Changeover Cost</p>
+        </header>
+
+        <section class="controls">
+            <div class="card">
+                <h3>Instance Upload</h3>
+                <div class="upload-area" id="drop-area">
+                    <input type="file" id="fileElem" accept=".dat">
+                    <label for="fileElem">Glissez-déposez ou cliquez ici</label>
+                </div>
+                <button id="solveBtn" class="btn-primary">Lancer l'Optimisation</button>
+            </div>
+
+            <div class="card stats">
+                <h3>Statistiques</h3>
+                <div id="metrics">
+                    <div class="metric"><span>Coût Total:</span> <strong id="totalCost">-</strong></div>
+                    <div class="metric"><span>Véhicules utilisés:</span> <strong id="vehCount">-</strong></div>
+                </div>
+            </div>
+        </section>
+
+        <section class="visualization-panel">
+            <div class="card map-container">
+                <svg id="routeMap" viewBox="0 0 100 100" preserveAspectRatio="xMidYMid meet">
+                    <!-- Routes and points will be drawn here -->
+                </svg>
+                <div class="legend" id="legend"></div>
+            </div>
+        </section>
+        
+        <section class="routes-list">
+            <div id="routesAccordion"></div>
+        </section>
+    </main>
+    <script src="script.js"></script>
+</body>
+</html>
