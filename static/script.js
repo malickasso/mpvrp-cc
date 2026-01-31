@@ -198,68 +198,86 @@ function render3DSolution(data) {
     vehCountEl.innerText = data.routes.length;
     clearScene();
 
+    const trackedNodes = new Set();
+
     data.routes.forEach((routeData, vIdx) => {
         const color = V_COLORS[vIdx % V_COLORS.length];
         const route = routeData.nodes;
-        const prods = routeData.prods;
+        const isIdle = routeData.is_idle || false;
 
-        // 1. Create Buildings with Names and Demands
-        route.forEach((node, i) => {
-            createDetailedBuilding(node, color);
-            if (node.type === 'station' || node.type === 'depot') {
-                const label = createTextLabel(`${node.idx}: ${node.demand || 0}L`, node.type === 'depot' ? '#f59e0b' : '#ef4444');
-                label.position.set(node.x, 8, node.y);
-                scene.add(label);
-                objects.push(label);
+        // 1. Create Buildings (only once)
+        route.forEach((node) => {
+            const nodeKey = `${node.type}_${node.x}_${node.y}_${node.idx}`;
+            if (!trackedNodes.has(nodeKey)) {
+                createDetailedBuilding(node, 0x475569); // Use a neutral color for buildings
+                if (node.type === 'station' || node.type === 'depot') {
+                    const label = createTextLabel(`${node.idx}: ${node.demand || 0}L`, node.type === 'depot' ? '#f59e0b' : '#ef4444');
+                    label.position.set(node.x, 8, node.y);
+                    scene.add(label);
+                    objects.push(label);
+                }
+                trackedNodes.add(nodeKey);
             }
         });
 
-        const curvePoints = route.map(n => new THREE.Vector3(n.x, 0.2, n.y));
-        const curve = new THREE.CatmullRomCurve3(curvePoints);
-        const tube = new THREE.Mesh(
-            new THREE.TubeGeometry(curve, 100, 0.1, 8, false),
-            new THREE.MeshBasicMaterial({ color: color, transparent: true, opacity: 0.2 })
-        );
-        scene.add(tube);
-        objects.push(tube);
+        // 2. Draw Route Path
+        if (!isIdle) {
+            const curvePoints = route.map(n => new THREE.Vector3(n.x, 0.2, n.y));
+            if (curvePoints.length >= 2) {
+                const curve = new THREE.CatmullRomCurve3(curvePoints);
+                const tube = new THREE.Mesh(
+                    new THREE.TubeGeometry(curve, 100, 0.1, 8, false),
+                    new THREE.MeshBasicMaterial({ color: color, transparent: true, opacity: 0.3 })
+                );
+                scene.add(tube);
+                objects.push(tube);
 
-        const truck = createDetailedTruck(color);
-        const truckLabel = createTextLabel('V' + (vIdx + 1), '#' + color.toString(16).padStart(6, '0'));
-        truckLabel.position.y = 4;
-        truck.add(truckLabel);
+                const truck = createDetailedTruck(color);
+                const truckLabel = createTextLabel('V' + (vIdx + 1), '#' + color.toString(16).padStart(6, '0'));
+                truckLabel.position.y = 4;
+                truck.add(truckLabel);
+                scene.add(truck);
+                objects.push(truck);
 
-        scene.add(truck);
-        objects.push(truck);
-
-        let start = Date.now();
-        const duration = 10000; // 10 seconds per route
-
-        function animateTruck() {
-            let elapsed = Date.now() - start;
-            let progress = elapsed / duration;
-
-            if (progress >= 1) {
-                // Stop at the end (Home Garage)
-                const finalPos = curve.getPointAt(1);
-                truck.position.copy(finalPos);
-                truckLabel.textContent = "DONE";
-                return;
+                // Animate active trucks
+                let start = Date.now();
+                const duration = 15000;
+                function animateTruck() {
+                    let elapsed = Date.now() - start;
+                    let progress = (elapsed / duration) % 1;
+                    const pos = curve.getPointAt(progress);
+                    const nextPos = curve.getPointAt((progress + 0.01) % 1);
+                    truck.position.copy(pos);
+                    truck.lookAt(nextPos);
+                    requestAnimationFrame(animateTruck);
+                }
+                animateTruck();
             }
+        } else {
+            // Idle Vehicle: Show at garage with an offset to avoid overlap
+            const truck = createDetailedTruck(color);
 
-            const pos = curve.getPointAt(progress);
-            const nextPos = curve.getPointAt(Math.min(progress + 0.01, 1));
-            truck.position.copy(pos);
-            truck.lookAt(nextPos);
+            // Add transparency for idle vehicles
+            truck.traverse((child) => {
+                if (child.isMesh) {
+                    child.material = child.material.clone();
+                    child.material.transparent = true;
+                    child.material.opacity = 0.5;
+                }
+            });
 
-            // Dynamic Truck Label
-            const nodeIdx = Math.floor(progress * (route.length - 1));
-            const current = prods[nodeIdx] || prods[prods.length - 1];
-            // We can't update text easily on CanvasTexture once created, 
-            // but we can show the truck is active
+            const truckLabel = createTextLabel('V' + (vIdx + 1) + ' (IDLE)', '#' + color.toString(16).padStart(6, '0'));
+            truckLabel.position.y = 4;
+            truck.add(truckLabel);
 
-            requestAnimationFrame(animateTruck);
+            // Calculate offset based on vehicle index
+            const offsetX = (vIdx % 3 - 1) * 3;
+            const offsetZ = (Math.floor(vIdx / 3)) * 4;
+            truck.position.set(route[0].x + offsetX, 0.2, route[0].y + offsetZ);
+
+            scene.add(truck);
+            objects.push(truck);
         }
-        animateTruck();
     });
 
     camera.position.set(50, 100, 150);

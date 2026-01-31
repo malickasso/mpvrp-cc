@@ -1,12 +1,3 @@
-"""
-MPVRP-CC Solver - Structured according to mathematical formulation
-
-Mathematical Model:
-- Variables: x_ijk (routing), y_ikp (delivery), z_kp1p2 (changeover costs)
-- Objective: Minimize transportation + changeover costs
-- Constraints: Demand satisfaction, capacity, routing balance, stock limits
-"""
-
 import math
 import platform
 import time
@@ -14,127 +5,81 @@ from ortools.constraint_solver import pywrapcp
 from ortools.constraint_solver import routing_enums_pb2
 from mpvrp_parser import parse_instance
 
-# ============================================================================
-# DISTANCE UTILITIES
-# ============================================================================
-
 def get_distance(p1, p2):
-    """Calculate Euclidean distance between two points"""
     return math.sqrt((p1['x'] - p2['x'])**2 + (p1['y'] - p2['y'])**2)
 
-
-# ============================================================================
-# DATA MODEL CREATION
-# ============================================================================
-
-def create_nodes(instance):
-    """
-    Create node list for the routing model.
-    Nodes include: Garages (start/end), Depots, Stations
-    """
+def create_data_model(instance):
+    data = {}
     nodes = []
     
-    # 1. Start Garages (one per vehicle)
+    # 1. Garages (Start/End)
     for v in instance.vehicles:
         garage = next(g for g in instance.garages if g['id'] == v['garage_id'])
         nodes.append({
             'node_index': len(nodes),
-            'type': 'garage',
-            'idx': garage['id'],
-            'x': garage['x'],
-            'y': garage['y'],
-            'product_type': v['start_product'] - 1,
-            'v_id': v['id'],
-            'demand': 0
+            'type': 'garage', 'idx': garage['id'], 'x': garage['x'], 'y': garage['y'],
+            'product_type': v['start_product'] - 1, 'v_id': v['id'], 'demand': 0
         })
-    
-    # 2. End Garages (one per vehicle)
     for v in instance.vehicles:
         garage = next(g for g in instance.garages if g['id'] == v['garage_id'])
         nodes.append({
             'node_index': len(nodes),
-            'type': 'garage',
-            'idx': garage['id'],
-            'x': garage['x'],
-            'y': garage['y'],
-            'product_type': -1,  # End garage has no specific product
-            'demand': 0
+            'type': 'garage', 'idx': garage['id'], 'x': garage['x'], 'y': garage['y'],
+            'product_type': -1, 'demand': 0
         })
-    
-    return nodes
-
-
-def create_pickup_delivery_pairs(instance, nodes):
-    """
-    Create pickup-delivery pairs respecting stock constraints.
-    
-    For each station demand of product p:
-    - Split demand by vehicle capacity
-    - Assign to closest depot with available stock
-    - Create (pickup_node, delivery_node) pairs
-    
-    Returns: pickup_delivery_pairs list
-    """
+        
+    # 2. Pickup and Delivery Pairs - WITHOUT pre-assigning to vehicles
     pickup_delivery_pairs = []
     current_idx = 2 * instance.nb_vehicles
     max_cap = max(v['capacity'] for v in instance.vehicles)
     
-    # Track cumulative demand per (depot, product)
+    # Track cumulative demand per depot-product pair
     depot_product_demand = {}
     for depot in instance.depots:
         for p_idx in range(instance.nb_products):
             depot_product_demand[(depot['id'], p_idx)] = 0
     
-    # Process each station's demands
-    for s in instance.stations:
+    for s_idx, s in enumerate(instance.stations):
         for p_idx, demand in enumerate(s['demands']):
-            if demand <= 0:
-                continue
+            if demand <= 0: continue
             
             rem_demand = int(demand)
             
-            # Find depots sorted by distance
+            # Find depot with available stock for this product, sorted by distance
             depots_sorted = sorted(
-                instance.depots,
+                instance.depots, 
                 key=lambda d: math.sqrt((d['x']-s['x'])**2 + (d['y']-s['y'])**2)
             )
             
-            # Assign demand to depots with available stock
             while rem_demand > 0:
                 chunk = min(rem_demand, max_cap)
                 
+                # Find best depot that still has stock
                 assigned = False
                 for depot in depots_sorted:
                     current_alloc = depot_product_demand[(depot['id'], p_idx)]
                     available = int(depot['stocks'][p_idx]) - current_alloc
                     
                     if available > 0:
+                        # Use what's available, up to chunk
                         actual_chunk = min(chunk, available)
                         depot_product_demand[(depot['id'], p_idx)] += actual_chunk
                         rem_demand -= actual_chunk
                         
-                        # PICKUP node (depot)
+                        # Pickup at Depot
                         nodes.append({
                             'node_index': len(nodes),
-                            'type': 'depot',
-                            'idx': depot['id'],
-                            'x': depot['x'],
-                            'y': depot['y'],
-                            'product_type': p_idx,
-                            'demand': actual_chunk
+                            'type': 'depot', 'idx': depot['id'], 'x': depot['x'], 'y': depot['y'],
+                            'product_type': p_idx, 'demand': actual_chunk
                         })
                         p_node_idx = current_idx
                         current_idx += 1
                         
-                        # DELIVERY node (station)
+                        # Delivery at Station
                         nodes.append({
                             'node_index': len(nodes),
-                            'type': 'station',
-                            'idx': s['id'],
-                            'x': s['x'],
-                            'y': s['y'],
-                            'product_type': p_idx,
-                            'demand': actual_chunk
+                            'type': 'station', 'idx': s['id'], 'x': s['x'], 'y': s['y'],
+                            'product_type': p_idx, 'demand': actual_chunk
                         })
                         d_node_idx = current_idx
                         current_idx += 1
@@ -144,37 +89,10 @@ def create_pickup_delivery_pairs(instance, nodes):
                         break
                 
                 if not assigned:
+                    # No depot has enough stock - mark as unsatisfiable
+                    # Let solver handle it with optimization
                     break
-    
-    return pickup_delivery_pairs
-
-
-def create_distance_matrix(nodes):
-    """
-    Create cost matrix for transportation.
-    
-    C_ij = Euclidean distance between nodes i and j
-    """
-    num_nodes = len(nodes)
-    matrix = [[0]*num_nodes for _ in range(num_nodes)]
-    
-    for i in range(num_nodes):
-        for j in range(num_nodes):
-            dist = get_distance(nodes[i], nodes[j])
-            cost = int(dist * 100)  # Scale by 100 for integer costs
-            matrix[i][j] = cost
-    
-    return matrix
-
-
-def create_data_model(instance):
-    """
-    Assemble the complete data model for OR-Tools routing
-    """
-    data = {}
-    nodes = create_nodes(instance)
-    pickup_delivery_pairs = create_pickup_delivery_pairs(instance, nodes)
-    
+                
     data['nodes'] = nodes
     data['num_vehicles'] = instance.nb_vehicles
     data['starts'] = list(range(instance.nb_vehicles))
@@ -182,117 +100,99 @@ def create_data_model(instance):
     data['pickup_delivery'] = pickup_delivery_pairs
     data['vehicle_capacities'] = [v['capacity'] for v in instance.vehicles]
     data['instance'] = instance
-    data['matrix'] = create_distance_matrix(nodes)
     
+    # Distance / Cost Matrix
+    num_nodes = len(nodes)
+    matrix = [[0]*num_nodes for _ in range(num_nodes)]
+    
+    for i in range(num_nodes):
+        for j in range(num_nodes):
+            n1, n2 = nodes[i], nodes[j]
+            dist = get_distance(n1, n2)
+            cost = int(dist * 100)
+            
+            # No additional penalties - let the solver optimize naturally
+            # The constraint forcing all vehicles to be used will handle distribution
+            
+            matrix[i][j] = cost
+            
+    data['matrix'] = matrix
     return data
 
-
-# ============================================================================
-# CONSTRAINT AND OBJECTIVE SETUP
-# ============================================================================
-
-def setup_objective_and_basic_constraints(manager, routing, data):
-    """
-    Setup:
-    1. Objective: Minimize ∑C_ij * x_ijk (transportation costs)
-    2. Basic constraints: distance, capacity callbacks
-    """
+def solve(instance_file):
+    start_time = time.time()
+    try:
+        instance = parse_instance(instance_file)
+        data = create_data_model(instance)
+    except Exception as e:
+        print(f"Error parsing instance: {e}")
+        return None
     
-    # Distance Callback (C_ij cost matrix)
+    manager = pywrapcp.RoutingIndexManager(len(data['nodes']), data['num_vehicles'], data['starts'], data['ends'])
+    routing = pywrapcp.RoutingModel(manager)
+
+    # Distance Callback
     def distance_callback(from_idx, to_idx):
         return data['matrix'][manager.IndexToNode(from_idx)][manager.IndexToNode(to_idx)]
     
     transit_idx = routing.RegisterTransitCallback(distance_callback)
     routing.SetArcCostEvaluatorOfAllVehicles(transit_idx)
     
-    # Capacity Dimension (demand constraint)
+    # Capacity Dimension
     def demand_callback(from_idx):
         node = data['nodes'][manager.IndexToNode(from_idx)]
-        if node['type'] == 'depot':
-            return node['demand']
-        if node['type'] == 'station':
-            return -node['demand']
+        if node['type'] == 'depot': return node['demand']
+        if node['type'] == 'station': return -node['demand']
         return 0
     
     demand_idx = routing.RegisterUnaryTransitCallback(demand_callback)
-    routing.AddDimensionWithVehicleCapacity(
-        demand_idx, 0, data['vehicle_capacities'], True, 'Capacity'
-    )
+    routing.AddDimensionWithVehicleCapacity(demand_idx, 0, data['vehicle_capacities'], True, 'Capacity')
     
-    return transit_idx, demand_idx
-
-
-def add_changeover_cost_constraint(manager, routing, data):
-    """
-    Add changeover costs dimension.
-    
-    H_p1,p2 = cost to change from product p1 to product p2
-    Applied at depots (transition points)
-    """
-    
+    # Transition Costs at Depots
+    # We add a secondary dimension to handle transition costs ONLY at depots.
     def transition_callback(from_idx, to_idx):
         f_node = data['nodes'][manager.IndexToNode(from_idx)]
         t_node = data['nodes'][manager.IndexToNode(to_idx)]
-        
         if t_node['type'] == 'depot':
             p1 = f_node['product_type']
             p2 = t_node['product_type']
             if p1 >= 0 and p1 != p2:
                 return int(data['instance'].transition_matrix[p1][p2] * 100)
         return 0
-    
+
     trans_idx = routing.RegisterTransitCallback(transition_callback)
     routing.AddDimension(trans_idx, 0, 10000000, True, 'Transitions')
     routing.GetDimensionOrDie('Transitions').SetSpanCostCoefficientForAllVehicles(1)
-    
-    return trans_idx
 
-
-def add_pickup_delivery_constraints(manager, routing, data):
-    """
-    Add pickup-delivery constraints.
-    
-    Ensures:
-    1. Same vehicle k serves both pickup and delivery (y_ikp constraints)
-    2. Pickup happens before delivery (routing order)
-    3. Capacity respected for partial loads
-    """
-    
+    # Pickup and Delivery
     for p_idx, d_idx in data['pickup_delivery']:
         p_index = manager.NodeToIndex(p_idx)
         d_index = manager.NodeToIndex(d_idx)
-        
-        # Same vehicle must serve both
         routing.AddPickupAndDelivery(p_index, d_index)
         routing.solver().Add(routing.VehicleVar(p_index) == routing.VehicleVar(d_index))
-        
-        # Pickup before delivery
-        routing.solver().Add(
-            routing.GetDimensionOrDie('Capacity').CumulVar(p_index) <
-            routing.GetDimensionOrDie('Capacity').CumulVar(d_index)
-        )
-
-
-def add_vehicle_distribution_constraints(manager, routing, data):
-    """
-    Add constraints to ensure multi-vehicle load distribution.
+        # Deliver after pick
+        routing.solver().Add(routing.GetDimensionOrDie('Capacity').CumulVar(p_index) < 
+                             routing.GetDimensionOrDie('Capacity').CumulVar(d_index))
     
-    If there's enough work (pairs > 3):
-    - Force at least 2 vehicles to be used
-    - Prevents concentration on single vehicle
-    """
+    # Encourage better load distribution across vehicles
+    # Force vehicles to be used if there's enough work to justify it
+    solver = routing.solver()
     
     num_pairs = len(data['pickup_delivery'])
     num_vehicles = data['num_vehicles']
-    solver = routing.solver()
     
+    # Force use of multiple vehicles if there's enough work
+    # This prevents the solver from concentrating all work on a single vehicle
+    # Logic: 
+    #   - If pairs > 3: force at least 2 vehicles
+    #   - If pairs > 10: force at least 3 vehicles (if available)
     min_vehicles_to_use = 1
     if num_pairs > 3:
         min_vehicles_to_use = min(2, num_vehicles)
     if num_pairs > 10:
         min_vehicles_to_use = min(3, num_vehicles)
     
-    # Force minimum vehicles to handle work
+    # Force minimum number of vehicles to handle work
     for v_id in range(min_vehicles_to_use):
         vehicle_pickups = []
         for p_idx, d_idx in data['pickup_delivery']:
@@ -301,46 +201,15 @@ def add_vehicle_distribution_constraints(manager, routing, data):
         
         if vehicle_pickups:
             solver.Add(solver.Sum(vehicle_pickups) >= 1)
-
-
-def solve(instance_file):
-    """
-    Main solver function.
-    Builds and solves the MPVRP-CC instance.
-    """
-    start_time = time.time()
     
-    try:
-        instance = parse_instance(instance_file)
-        data = create_data_model(instance)
-    except Exception as e:
-        print(f"Error parsing instance: {e}")
-        return None
-    
-    # Create routing model
-    manager = pywrapcp.RoutingIndexManager(
-        len(data['nodes']),
-        data['num_vehicles'],
-        data['starts'],
-        data['ends']
-    )
-    routing = pywrapcp.RoutingModel(manager)
-    
-    # Setup objective and basic constraints
-    setup_objective_and_basic_constraints(manager, routing, data)
-    
-    # Add domain-specific constraints
-    add_changeover_cost_constraint(manager, routing, data)
-    add_pickup_delivery_constraints(manager, routing, data)
-    add_vehicle_distribution_constraints(manager, routing, data)
-    
-    # Search parameters
+    # Stock constraints are implicitly enforced by the construction of pickup_delivery_pairs
+    # which respects available stock at creation time
+        
     search_params = pywrapcp.DefaultRoutingSearchParameters()
     search_params.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PARALLEL_CHEAPEST_INSERTION
     search_params.local_search_metaheuristic = routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
-    search_params.time_limit.seconds = 60
+    search_params.time_limit.seconds = 60  # Increased from 30 to handle distribution constraints
     
-    # Solve
     solution = routing.SolveWithParameters(search_params)
     
     res_time = time.time() - start_time
@@ -348,53 +217,60 @@ def solve(instance_file):
         return format_solution(data, manager, routing, solution, res_time)
     return None
 
-
-# ============================================================================
-# SOLUTION FORMATTING
-# ============================================================================
+def get_processor_name():
+    try:
+        if platform.system() == "Windows":
+            return platform.processor() or "Windows Processor"
+        return platform.processor() or "Generic Processor"
+    except:
+        return "Unknown Processor"
 
 def fix_route_structure(route, data):
     """
-    Post-process route to enforce: Garage → [Depot → Stations]* → Garage
+    Post-process a route to enforce mini-route structure.
+    Ensures: Garage → [Depot → Stations]* → Garage
     """
     if len(route) <= 2:
         return route
     
+    # Create a map for pickup-delivery pairs based on node_index
     delivery_map = {}
     for p_idx, d_idx in data['pickup_delivery']:
         delivery_map[p_idx] = d_idx
-    
+
     fixed_route = [route[0]]
-    used_indices = {0}
+    used_indicesInRoute = {0}
+    
+    # We want to maintain the relative order of PICKUPS decided by OR-Tools
+    # but forcefully insert their paired delivery immediately after.
     
     for i in range(1, len(route) - 1):
         node = route[i]
-        if node['type'] == 'depot' and i not in used_indices:
+        if node['type'] == 'depot' and i not in used_indicesInRoute:
             fixed_route.append(node)
-            used_indices.add(i)
+            used_indicesInRoute.add(i)
             
+            # Find the delivery node in the original route matching this pickup
             node_internal_index = node['node_index']
             target_delivery_index = delivery_map.get(node_internal_index)
             
             if target_delivery_index is not None:
+                # Find where this delivery index is in the original route
                 for j in range(1, len(route) - 1):
                     if route[j]['node_index'] == target_delivery_index:
                         fixed_route.append(route[j])
-                        used_indices.add(j)
+                        used_indicesInRoute.add(j)
                         break
-    
+                        
+    # Add any leftover stations (should not happen with 1:1 pairing)
     for i in range(1, len(route) - 1):
-        if i not in used_indices:
+        if i not in used_indicesInRoute:
             fixed_route.append(route[i])
-    
+            
     fixed_route.append(route[-1])
     return fixed_route
 
-
 def format_solution(data, manager, routing, solution, res_time):
-    """
-    Format raw solution into structured routes with costs
-    """
     routes = []
     for v_id in range(data['num_vehicles']):
         v_route = []
@@ -405,10 +281,11 @@ def format_solution(data, manager, routing, solution, res_time):
             index = solution.Value(routing.NextVar(index))
         v_route.append(data['nodes'][manager.IndexToNode(index)])
         
+        # Apply post-processing to fix route structure
         v_route = fix_route_structure(v_route, data)
+        
         routes.append(v_route)
-    
-    # Calculate metrics
+        
     real_dist = 0
     real_trans = 0
     num_changes = 0
@@ -420,24 +297,34 @@ def format_solution(data, manager, routing, solution, res_time):
         v_changes = 0
         v_path = []
         v_prods = []
-        is_idle = len(r) <= 2
+        is_idle = len(r) <= 2  # Vehicle stayed at garage
         
+        # Start with the vehicle's initial product configuration
         curr_prod = r[0]['product_type'] if r[0]['product_type'] >= 0 else 0
         
         for i in range(len(r)):
             n = r[i]
             v_path.append(n)
             
+            # Determine the product being carried at this node
             if n['type'] == 'depot':
+                # At depot: we're picking up this product, so truck now carries it
                 new_prod = n['product_type']
                 if i > 0 and curr_prod >= 0 and curr_prod != new_prod:
+                    # Product change detected
                     cost = data['instance'].transition_matrix[curr_prod][new_prod]
                     v_trans += cost
                     v_changes += 1
                 curr_prod = new_prod
+            elif n['type'] == 'station':
+                # At station: we're delivering, truck still carries same product
+                # curr_prod remains unchanged
+                pass
+            # For garage: product_type might be -1 or the initial product
             
             v_prods.append({'prod': curr_prod, 'cum_cost': v_trans})
             
+            # Calculate distance to next node
             if i < len(r) - 1:
                 v_dist += get_distance(n, r[i+1])
         
@@ -452,7 +339,7 @@ def format_solution(data, manager, routing, solution, res_time):
         real_dist += v_dist
         real_trans += v_trans
         num_changes += v_changes
-    
+
     return {
         'total_distance': round(real_dist, 2),
         'total_transition_cost': round(real_trans, 2),
@@ -462,19 +349,7 @@ def format_solution(data, manager, routing, solution, res_time):
         'processor': get_processor_name()
     }
 
-
-def get_processor_name():
-    """Get processor information"""
-    try:
-        if platform.system() == "Windows":
-            return platform.processor() or "Windows Processor"
-        return platform.processor() or "Generic Processor"
-    except:
-        return "Unknown Processor"
-
-
 def generate_dat_solution(sol_data, instance_name):
-    """Generate .dat solution file"""
     lines = []
     v_used = len(sol_data['routes'])
     
@@ -491,13 +366,13 @@ def generate_dat_solution(sol_data, instance_name):
                 visit_parts.append(f"{n['idx']} ({n['demand']})")
         lines.append(f"{v_id}: {' - '.join(visit_parts)}")
         
-        # Line 2: Products
+        # Line 2: Products (revert to 0-based indexing as expected by validator)
         prod_parts = []
         for p in r['prods']:
             prod_parts.append(f"{p['prod']}({p['cum_cost']:.2f})")
         lines.append(f"{v_id}: {' - '.join(prod_parts)}")
         lines.append("")
-    
+        
     lines.append(str(v_used))
     lines.append(str(sol_data['num_changes']))
     lines.append(f"{sol_data['total_transition_cost']:.2f}")
@@ -505,7 +380,6 @@ def generate_dat_solution(sol_data, instance_name):
     lines.append(sol_data['processor'])
     lines.append(f"{sol_data['res_time']:.3f}")
     return "\n".join(lines)
-
 
 if __name__ == "__main__":
     import sys, os
